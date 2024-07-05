@@ -19,6 +19,13 @@ struct frame_ipv4
     BYTE DATA[LEN]={0}; //  memcpy(void*(org),void*(dst),len)
 };
 
+struct nodo{
+    BYTE ip_origen[3]={0};
+    BYTE ip_destino[3]={0};
+    int TTL=0;
+    nodo* siguiente = nullptr;
+};
+
 void doom();
 int largo_data(frame_ipv4 *frame);
 int fcs_IPV4(BYTE* buff);
@@ -33,6 +40,8 @@ int main(int nargs, char* arg_arr[]){
         char msg[500];
         char msg_rx[1000];
 
+        nodo* tabla_ruta=new nodo;
+
         frame_ipv4 frame;
         int len = 0;
         //Obtiene nombre IP
@@ -44,8 +53,9 @@ int main(int nargs, char* arg_arr[]){
         //Obtiene puerto virtual rx
         char* virtual_port_rx = arg_arr[3];
 
-        FILE* vport_escribe = fopen(virtual_port_tx, "w");
-        FILE* vport_lee = fopen(virtual_port_rx, "r");
+        FILE* vport_uno = fopen(virtual_port_tx, "w+");
+        FILE* vport_dos = fopen(virtual_port_rx, "w+");
+
         //Inicia la capa 1 y 2
         //Obtiene descriptores
         int stdin_desc = fileno(stdin);
@@ -65,7 +75,7 @@ int main(int nargs, char* arg_arr[]){
         while(flag){
             
             //Lee mensajes del puerto virtual y los muestra
-            len = readSlip((BYTE*)msg_rx, 1000,vport_lee);
+            len = readSlip((BYTE*)msg_rx, 1000, vport_dos);
             msg_rx[len-1] = '\0';
             if(len>0){ //y si es 255 entonces broadcast
                 frame_ipv4 recibido;
@@ -88,21 +98,24 @@ int main(int nargs, char* arg_arr[]){
                     recibido.TTL--;
                     if (recibido.TTL > 0){
                         empaquetar_IPV4(buffer, &recibido);
-                        writeSlip((BYTE*)buffer, (recibido.len_datos + 16), vport_escribe);
+                        writeSlip((BYTE*)buffer, (recibido.len_datos + 16), vport_uno);
                         memset(buffer,0,sizeof(buffer));
-                    }else{
+                    }
+                    else{
                         printf("ERROR TTL = 0\n");
                     }
-                } else if(recibido.ip_destino[3] == frame.ip_origen[3] && recibido.ip_destino[3] != 255){
+                }
+                else if(recibido.ip_destino[3] == frame.ip_origen[3] && recibido.ip_destino[3] != 255){
                     printf("MENSAJE UNICAST RECIBIDO\n");
                     printf("IP ORIGEN: %hhu.%hhu.%hhu.%hhu\n", recibido.ip_origen[0], recibido.ip_origen[1], recibido.ip_origen[2], recibido.ip_origen[3]);
                     printf("TTL: %hhu\n", (13 - recibido.TTL));
                     printf("MENSAJE: %s\n", recibido.DATA);
                     printf("-------------------------------------\n");
-                } else{
+                }
+                else{
                     recibido.TTL--;
                     empaquetar_IPV4(buffer, &recibido);
-                    writeSlip((BYTE*)buffer, (recibido.len_datos + 16), vport_escribe);
+                    writeSlip((BYTE*)buffer, (recibido.len_datos + 16), vport_uno);
                     memset(buffer,0,sizeof(buffer));
                 }
                 memset(msg_rx, 0, sizeof(msg_rx));
@@ -115,25 +128,26 @@ int main(int nargs, char* arg_arr[]){
                     msg[len - 1] = '\0';
                     len--;
                 }
+                int ruta;
                 printf("escribio -> %s\n",msg); 
                 frame.flag_fragmento=0;
                 frame.offset_fragmento=0;
                 frame.ip_destino[0]=192;
                 frame.ip_destino[1]=168;
                 frame.ip_destino[2]=130;
-                sscanf(msg, "%hhu / %499[^\n]", &frame.ip_destino[3], frame.DATA);
+                sscanf(msg, "%hhu / %d / %499[^\n]", &frame.ip_destino[3], &ruta ,frame.DATA);
                 frame.len_datos=largo_data(&frame);
                 frame.TTL=12;
                 frame.identificacion=0;
                 if(frame.ip_destino[3]==255){
                     printf("BROADCAST DETECTADO %d -", frame.ip_destino[3]);
                     empaquetar_IPV4(buffer, &frame);
-                    writeSlip((BYTE*)buffer, (frame.len_datos+16),vport_escribe);
+                    writeSlip((BYTE*)buffer, (frame.len_datos+16), vport_uno);
                     printf("ENVIANDO DATA --> %s\n", frame.DATA);
                 }else if(frame.ip_destino[3]>0 && frame.ip_destino[3]<255){
                     printf("UNICAST\n");
                     empaquetar_IPV4(buffer, &frame);
-                    writeSlip((BYTE*)buffer, (frame.len_datos+16),vport_escribe);
+                    writeSlip((BYTE*)buffer, (frame.len_datos+16), vport_uno);
                     printf("ENVIANDO DATA --> %s\n", frame.DATA);
                 }else{
                     printf("Error\n");
@@ -156,6 +170,7 @@ int main(int nargs, char* arg_arr[]){
     }    
     return 0;
 }
+
 
 int fcs_IPV4(BYTE* buff){
     int fcs_value=0;
@@ -215,6 +230,7 @@ void desempaquetar_IPV4(BYTE *buff, frame_ipv4* recuperado){
     p+=sizeof(recuperado->ip_destino);
     memcpy(recuperado->DATA, buff+p, recuperado->len_datos);
 }
+
 void doom(){
     FILE* archivo = fopen("banner.txt", "r");
     char buff[1000];
@@ -223,4 +239,69 @@ void doom(){
         printf("%s", buff);
     }
     fclose(archivo);
+}
+// Agregar un Nodo al Final
+void agregarNodo(nodo** cabeza, BYTE ip_origen[3], BYTE ip_destino[3], int TTL) {
+    nodo* nuevoNodo = new nodo;
+    memcpy(nuevoNodo->ip_origen, ip_origen, 3);
+    memcpy(nuevoNodo->ip_destino, ip_destino, 3);
+    nuevoNodo->TTL = TTL;
+    nuevoNodo->siguiente = nullptr;
+
+    if (*cabeza == nullptr) {
+        *cabeza = nuevoNodo;
+    } else {
+        nodo* actual = *cabeza;
+        while (actual->siguiente != nullptr) {
+            actual = actual->siguiente;
+        }
+        actual->siguiente = nuevoNodo;
+    }
+}
+
+// Buscar un Nodo
+nodo* buscarNodo(nodo* cabeza, BYTE ip_destino[3]) {
+    while (cabeza != nullptr) {
+        if (memcmp(cabeza->ip_destino, ip_destino, 3) == 0) {
+            return cabeza;
+        }
+        cabeza = cabeza->siguiente;
+    }
+    return nullptr;
+}
+
+// Eliminar un Nodo
+void eliminarNodo(nodo** cabeza, BYTE ip_destino[3]) {
+    nodo* actual = *cabeza;
+    nodo* anterior = nullptr;
+
+    while (actual != nullptr && memcmp(actual->ip_destino, ip_destino, 3) != 0) {
+        anterior = actual;
+        actual = actual->siguiente;
+    }
+
+    if (actual == nullptr) return; // No se encontró el nodo
+
+    if (anterior == nullptr) {
+        // Eliminar el primer nodo
+        *cabeza = actual->siguiente;
+    } else {
+        anterior->siguiente = actual->siguiente;
+    }
+
+    delete actual;
+}
+
+// Liberar la Lista
+void liberarLista(nodo** cabeza) {
+    nodo* actual = *cabeza;
+    nodo* siguiente = nullptr;
+
+    while (actual != nullptr) {
+        siguiente = actual->siguiente;
+        delete actual;
+        actual = siguiente;
+    }
+
+    *cabeza = nullptr;
 }
