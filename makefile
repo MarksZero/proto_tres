@@ -2,7 +2,8 @@ all:
 	g++ -Wall serial.cpp -c
 	g++ -Wall slip.cpp -c
 	g++ -Wall nodo.cpp -c
-	g++ -Wall slip.o serial.o nodo.o -o nodo
+	g++ -Wall funciones_nodo.cpp -c
+	g++ -Wall slip.o serial.o nodo.o funciones_nodo.o -o nodo
 mk_socket:
 	g++ -Wall virtualSocket.cpp -o virtualSocket
 run_socket:
