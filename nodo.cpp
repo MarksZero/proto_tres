@@ -13,6 +13,7 @@ struct frame_ipv4 {
     int offset_fragmento = 0; //12bits   si esta fragmentado
     int len_datos = 0; //16bits 2bytes largo total del paquete
     BYTE TTL = 0; //8bits 1byte
+    bool es_ping = false;
     BYTE identificacion = 0; //8bits 1byte    si esta fragmentado
     int s_verificacion = 0; //16bits 2bytes
     BYTE ip_origen[4] = {0}; //32bits 4bytes
@@ -27,18 +28,31 @@ struct nodo {
     nodo *siguiente = nullptr;
 };
 
+void instrucciones(int op, char *nombreIP);
+
 void doom();
+
 int largo_data(frame_ipv4 *frame);
+
 int fcs_IPV4(BYTE *buff);
+
 void empaquetar_IPV4(BYTE *buff, frame_ipv4 *trama);
+
 void desempaquetar_IPV4(BYTE *buff, frame_ipv4 *recuperado);
+
 void agregarNodo(nodo **cabeza, BYTE ip_origen[3], BYTE ip_destino[3], int TTL);
+
 nodo *buscarNodo(nodo *cabeza, BYTE ip_destino[3]);
+
 void eliminarNodo(nodo **cabeza, BYTE ip_destino[3]);
+
 void liberarLista(nodo **cabeza);
-nodo* encontrarRutaMasCorta(nodo* cabeza);
-void enviar_a_todos(nodo **tabla_ruta, const char *virtual_port_tx, BYTE ip_origen_final, BYTE ip_destino_final);
-void revisando_rutas(nodo **tabla_ruta, const char *virtual_port_tx, BYTE ip_origen_final);
+
+nodo *encontrarRutaMasCorta(nodo *cabeza);
+
+void enviar_a_todos(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final, BYTE ip_destino_final, BYTE TTL);
+
+void ping_rutas(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final);
 
 
 bool flag = true;
@@ -49,7 +63,7 @@ int main(int nargs, char *arg_arr[]) {
         char msg[500];
         char msg_rx[1000];
 
-        nodo* tabla_ruta=new nodo;
+        nodo *tabla_ruta = new nodo;
 
         frame_ipv4 frame;
         int len = 0;
@@ -72,18 +86,33 @@ int main(int nargs, char *arg_arr[]) {
         //Obtiene descriptores
 
         //Indica inicio del chat
-        printf("chat\n");
-        printf("Ya puede escribir sus mensajes !\n");
-        printf("Mi IP: %s\n", nombreIP);
-        printf("Seleccione IP de destino\n");
-        printf("|---SOLO ESCRIBIR ULTIMO VALOR---|\n");
-        printf("Recuerde 255 es broadcast\n");
-        printf("Rango entre 1-254 usuario\n");
-        printf("Ejemplo --> 255 / Puerto / MENSAJE.\n");
-        printf("|----Para-obtener-las-rutas---> rutas**----|\n");
+        int opcion;
+        printf("opciones\n");
+        printf("0.- Enviar mensaje\n");
+        printf("1.-Instructivo\n");
+        printf("2.- Mostrar rutas\n");
+        printf("3.- Ping\n");
+        printf("|------------------------------------|\n");
+        sscanf(msg,"%d", &opcion);
+        if (opcion == 0) {
+            instrucciones(0, nombreIP);
+        } else if (opcion == 1) {
+            instrucciones(1, nombreIP);
+        } else if (opcion == 2) {
+            //mostrar rutas
+        } else if (opcion == 3) {
+            ping_rutas(&tabla_ruta, virtual_port_tx, virtual_port_rx, frame.ip_origen[3]);
+        } else {
+            printf("Error\n");
+        }
+
         memset(msg, 0, sizeof(msg));
         memset(msg_rx, 0, sizeof(msg_rx));
+
         while (flag) {
+
+
+
             //Lee mensajes del puerto virtual y los muestra
             len = readSlip((BYTE *) msg_rx, 1000, vport_dos);
             msg_rx[len - 1] = '\0';
@@ -91,58 +120,71 @@ int main(int nargs, char *arg_arr[]) {
                 //y si es 255 entonces broadcast
                 frame_ipv4 recibido;
                 desempaquetar_IPV4((BYTE *) msg_rx, &recibido);
-                if (strcmp((char *) recibido.DATA, "cerrar") == 0) {
-                    flag = false;
-                }
-                if (recibido.ip_destino[3] == 255) {
-                    if (frame.ip_origen[3] == recibido.ip_origen[3]) {
-                        //si es el mismo nodo
-                        continue;
-                    }
-                    printf("MENSAJE BROADCAST RECIBIDO\n");
-                    printf("IP ORIGEN: %hhu.%hhu.%hhu.%hhu\n", recibido.ip_origen[0], recibido.ip_origen[1],
-                           recibido.ip_origen[2], recibido.ip_origen[3]);
-                    printf("TTL: %hhu\n", (13 - recibido.TTL));
-                    printf("MENSAJE: %s\n", recibido.DATA);
-                    printf("-------------------------------------\n");
-                    if (strcmp((char *) recibido.DATA, "DOOM") == 0) {
-                        doom();
-                    }
-                    //**************************************************************************************************
-                    //********************************AQUI*AJUSTA*LAS*RUTAS*********************************************
 
-                    if (strcmp((char *) recibido.DATA, "rutas**") == 0) {
+                if (recibido.es_ping) {
+                    if (recibido.ip_destino[3] == frame.ip_origen[3]) {
+                        // Es un ping para este nodo, responder con el TTL actual
+                        frame_ipv4 respuesta;
+                        memcpy(respuesta.ip_origen, recibido.ip_destino, 4);
+                        memcpy(respuesta.ip_destino, recibido.ip_origen, 4);
+                        respuesta.TTL = recibido.TTL;
+                        respuesta.es_ping = false;
+                        strcpy((char*)respuesta.DATA, "PONG");
+                        respuesta.len_datos = strlen((char*)respuesta.DATA) + 1;
 
-                        revisando_rutas(&tabla_ruta, virtual_port_tx, frame.ip_origen[3]);
-                        continue; // Para evitar procesar más lógica después de mostrar las rutas
+                        empaquetar_IPV4(buffer, &respuesta);
+                        writeSlip((BYTE *)buffer, (respuesta.len_datos + 16), vport_uno);
+                    } else {
+                        // Es un ping para otro nodo, reenviar decrementando el TTL
+                        recibido.TTL--;
+                        if (recibido.TTL > 0) {
+                            empaquetar_IPV4(buffer, &recibido);
+                            writeSlip((BYTE *)buffer, (recibido.len_datos + 16), vport_uno);
+                        }
                     }
-                    //**************************************************************************************************
-                    //**************************************************************************************************
-
-                    recibido.TTL--;
-                    if (recibido.TTL > 0) {
+                }else {
+                    if (strcmp((char *) recibido.DATA, "cerrar") == 0) {
+                        flag = false;
+                    }
+                    if (recibido.ip_destino[3] == 255) {
+                        if (frame.ip_origen[3] == recibido.ip_origen[3]) {
+                            //si es el mismo nodo
+                            continue;
+                        }
+                        printf("MENSAJE BROADCAST RECIBIDO\n");
+                        printf("IP ORIGEN: %hhu.%hhu.%hhu.%hhu\n", recibido.ip_origen[0], recibido.ip_origen[1],
+                               recibido.ip_origen[2], recibido.ip_origen[3]);
+                        printf("TTL: %hhu\n", (13 - recibido.TTL));
+                        printf("MENSAJE: %s\n", recibido.DATA);
+                        printf("-------------------------------------\n");
+                        if (strcmp((char *) recibido.DATA, "DOOM") == 0) {
+                            doom();
+                        }
+                        recibido.TTL--;
+                        if (recibido.TTL > 0) {
+                            empaquetar_IPV4(buffer, &recibido);
+                            writeSlip((BYTE *) buffer, (recibido.len_datos + 16), vport_uno);
+                            memset(buffer, 0, sizeof(buffer));
+                        } else {
+                            printf("ERROR TTL = 0\n");
+                        }
+                    } else if (recibido.ip_destino[3] == frame.ip_origen[3] && recibido.ip_destino[3] != 255) {
+                        printf("MENSAJE UNICAST RECIBIDO\n");
+                        printf("IP ORIGEN: %hhu.%hhu.%hhu.%hhu\n", recibido.ip_origen[0], recibido.ip_origen[1],
+                               recibido.ip_origen[2], recibido.ip_origen[3]);
+                        printf("TTL: %hhu\n", (13 - recibido.TTL));
+                        printf("MENSAJE: %s\n", recibido.DATA);
+                        printf("-------------------------------------\n");
+                    } else {
+                        recibido.TTL--;
                         empaquetar_IPV4(buffer, &recibido);
                         writeSlip((BYTE *) buffer, (recibido.len_datos + 16), vport_uno);
                         memset(buffer, 0, sizeof(buffer));
-                    } else {
-                        printf("ERROR TTL = 0\n");
                     }
-                } else if (recibido.ip_destino[3] == frame.ip_origen[3] && recibido.ip_destino[3] != 255) {
-                    printf("MENSAJE UNICAST RECIBIDO\n");
-                    printf("IP ORIGEN: %hhu.%hhu.%hhu.%hhu\n", recibido.ip_origen[0], recibido.ip_origen[1],
-                           recibido.ip_origen[2], recibido.ip_origen[3]);
-                    printf("TTL: %hhu\n", (13 - recibido.TTL));
-                    printf("MENSAJE: %s\n", recibido.DATA);
-                    printf("-------------------------------------\n");
-                } else {
-                    recibido.TTL--;
-                    empaquetar_IPV4(buffer, &recibido);
-                    writeSlip((BYTE *) buffer, (recibido.len_datos + 16), vport_uno);
-                    memset(buffer, 0, sizeof(buffer));
                 }
                 memset(msg_rx, 0, sizeof(msg_rx));
             }
-
+//*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
             //Lee consola y envía el mensaje por el puerto virtual
             len = readPort(stdin_desc, (BYTE *) msg, 500, 100);
             msg[len] = '\0';
@@ -179,6 +221,9 @@ int main(int nargs, char *arg_arr[]) {
                 memset(msg, 0, sizeof(msg));
             }
         }
+
+//**********************************************************************************************************************
+
     } else if (nargs == 2 && strcmp(arg_arr[1],HELP) == 0) {
         printf("MANUAL DE USUARIO:\n");
         printf("-------------------\n");
@@ -325,11 +370,12 @@ void liberarLista(nodo **cabeza) {
 
     *cabeza = nullptr;
 }
-nodo* encontrarRutaMasCorta(nodo* cabeza) {
+
+nodo *encontrarRutaMasCorta(nodo *cabeza) {
     if (cabeza == nullptr) return nullptr; // Lista vacía
 
-    nodo* rutaMasCorta = cabeza;
-    nodo* actual = cabeza->siguiente;
+    nodo *rutaMasCorta = cabeza;
+    nodo *actual = cabeza->siguiente;
 
     while (actual != nullptr) {
         if (actual->TTL < rutaMasCorta->TTL) {
@@ -341,52 +387,136 @@ nodo* encontrarRutaMasCorta(nodo* cabeza) {
     return rutaMasCorta;
 }
 
-void enviar_a_todos(nodo **tabla_ruta, const char *virtual_port_tx, BYTE ip_origen_final, BYTE ip_destino_final) {
+void instrucciones(int op, char *nombreIP) {
+    if (op == 0) {
+        printf("chat\n");
+        printf("Ya puede escribir sus mensajes !\n");
+        printf("Mi IP: %s\n", nombreIP);
+        printf("Seleccione IP de destino\n");
+    } else if (op == 1) {
+        printf("|---SOLO ESCRIBIR ULTIMO VALOR---|\n");
+        printf("Recuerde 255 es broadcast\n");
+        printf("Rango entre 1-254 usuario\n");
+        printf("Ejemplo --> 255 / Puerto / MENSAJE.\n");
+        printf("|----Para-obtener-las-rutas---> rutas**----|\n");
+    }
+}
+
+void enviar_a_todos(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final, BYTE ip_destino_final, BYTE TTL){
     frame_ipv4 frame;
-    // Asumiendo que los primeros tres bytes de la IP son iguales para todos los nodos
     BYTE ip_base[3] = {192, 168, 130};
     memcpy(frame.ip_origen, ip_base, 3);
     frame.ip_origen[3] = ip_origen_final;
     memcpy(frame.ip_destino, ip_base, 3);
     frame.ip_destino[3] = ip_destino_final;
-    frame.TTL = 12; // TTL inicial para el mensaje simple
-    strcpy((char *)frame.DATA, "MSG_SIMPLE"); // Mensaje simple
+    frame.TTL = TTL;
+
+    // Determinar el mensaje basado en el puerto virtual utilizado
+    if (strcmp(virtual_port_tx, "vport_uno") == 0) {
+        strcpy((char *) frame.DATA, "ruta_*_1");
+    } else if (strcmp(virtual_port_rx, "vport_dos") == 0) {
+        strcpy((char *) frame.DATA, "ruta_*_2");
+    }
+
     frame.len_datos = largo_data(&frame);
 
     BYTE buffer[1516] = {0};
     empaquetar_IPV4(buffer, &frame);
 
     FILE *vport_uno = fopen(virtual_port_tx, "w+");
-    if (vport_uno != nullptr) {
+    FILE *vport_dos = fopen(virtual_port_rx, "w+");
+    if (vport_uno != nullptr && vport_dos != nullptr) {
         writeSlip(buffer, (frame.len_datos + 16), vport_uno);
+        writeSlip(buffer, (frame.len_datos + 16), vport_dos);
         fclose(vport_uno);
+        fclose(vport_dos);
+    } else {
+        if (vport_uno != nullptr) fclose(vport_uno);
+        if (vport_dos != nullptr) fclose(vport_dos);
     }
 
-    // Simula la recepción del mensaje en el nodo destino y almacena la ruta
     agregarNodo(tabla_ruta, &frame.ip_origen[3], &frame.ip_destino[3], frame.TTL);
 }
+void ping_rutas(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final) {
+    BYTE ip_destino_final;
+    printf("Ingrese el último octeto de la IP de destino (1-254): ");
+    scanf("%hhu", &ip_destino_final);
 
-void revisando_rutas(nodo **tabla_ruta, const char *virtual_port_tx, BYTE ip_origen_final) {
-    // Inicializa las rutas a los nodos vecinos
-    BYTE ip_destinos_finales[] = {1, 2, 3, 4, 5}; // Últimos bytes de las IPs de destino
-    int num_destinos = sizeof(ip_destinos_finales) / sizeof(ip_destinos_finales[0]); // Número de destinos
-
-    for (int i = 0; i < num_destinos; ++i) { // Envía un mensaje a cada nodo vecino
-        if (ip_origen_final != ip_destinos_finales[i]) { // Evita enviar mensaje a sí mismo
-            // Envía un mensaje simple a cada nodo vecino
-            enviar_a_todos(tabla_ruta, virtual_port_tx, ip_origen_final, ip_destinos_finales[i]);
-        }
+    if (ip_destino_final == ip_origen_final || ip_destino_final < 1 || ip_destino_final > 254) {
+        printf("IP de destino inválida.\n");
+        return;
     }
 
-    // Encuentra la ruta más corta después de inicializar o actualizar las rutas
-    nodo* rutaMasCorta = encontrarRutaMasCorta(*tabla_ruta);
-    if (rutaMasCorta != nullptr) { // Si se encontró una ruta más corta
-        // Aquí puedes hacer algo con la ruta más corta, como imprimir sus detalles
-        printf("Ruta más corta encontrada: IP Origen: %hhu.%hhu.%hhu.%hhu, IP Destino: %hhu.%hhu.%hhu.%hhu, TTL: %d\n",
-               rutaMasCorta->ip_origen[0], rutaMasCorta->ip_origen[1], rutaMasCorta->ip_origen[2], 255, // Asumiendo que el último byte es siempre 255 para origen
-               rutaMasCorta->ip_destino[0], rutaMasCorta->ip_destino[1], rutaMasCorta->ip_destino[2], 255, // Asumiendo que el último byte es siempre 255 para destino
-               rutaMasCorta->TTL);
+    frame_ipv4 frame_tx, frame_rx;
+    BYTE buffer[1516] = {0};
+    char msg_rx[1000];
+    int len;
+
+    FILE *vport_uno = fopen(virtual_port_tx, "w+");
+    FILE *vport_dos = fopen(virtual_port_rx, "w+");
+
+    if (vport_uno == NULL || vport_dos == NULL) {
+        printf("Error al abrir los puertos virtuales.\n");
+        if (vport_uno) fclose(vport_uno);
+        if (vport_dos) fclose(vport_dos);
+        return;
+    }
+
+    // Preparar el frame de ping
+    BYTE ip_base[3] = {192, 168, 130};
+    memcpy(frame_tx.ip_origen, ip_base, 3);
+    frame_tx.ip_origen[3] = ip_origen_final;
+    memcpy(frame_tx.ip_destino, ip_base, 3);
+    frame_tx.ip_destino[3] = ip_destino_final;
+    frame_tx.TTL = 13;
+    frame_tx.es_ping = true;
+    strcpy((char*)frame_tx.DATA, "PING");
+    frame_tx.len_datos = strlen((char*)frame_tx.DATA) + 1;
+
+    // Enviar por vport_uno
+    empaquetar_IPV4(buffer, &frame_tx);
+    writeSlip(buffer, (frame_tx.len_datos + 16), vport_uno);
+
+    // Esperar y leer la respuesta
+    len = readSlip((BYTE *)msg_rx, 1000, vport_uno);
+    int ttl_vport_uno = -1;
+    if (len > 0) {
+        desempaquetar_IPV4((BYTE *)msg_rx, &frame_rx);
+        ttl_vport_uno = frame_rx.TTL;
+    }
+
+    // Enviar por vport_dos
+    writeSlip(buffer, (frame_tx.len_datos + 16), vport_dos);
+
+    // Esperar y leer la respuesta
+    len = readSlip((BYTE *)msg_rx, 1000, vport_dos);
+    int ttl_vport_dos = -1;
+    if (len > 0) {
+        desempaquetar_IPV4((BYTE *)msg_rx, &frame_rx);
+        ttl_vport_dos = frame_rx.TTL;
+    }
+
+    fclose(vport_uno);
+    fclose(vport_dos);
+
+    // Comparar y mostrar resultados
+    if (ttl_vport_uno > 0 && ttl_vport_dos > 0) {
+        if (ttl_vport_uno >= ttl_vport_dos) {
+            printf("La ruta más rápida a %d.%d.%d.%d es por vport_uno con TTL %d\n",
+                   192, 168, 130, ip_destino_final, ttl_vport_uno);
+            agregarNodo(tabla_ruta, &ip_origen_final, &ip_destino_final, ttl_vport_uno);
+        } else {
+            printf("La ruta más rápida a %d.%d.%d.%d es por vport_dos con TTL %d\n",
+                   192, 168, 130, ip_destino_final, ttl_vport_dos);
+            agregarNodo(tabla_ruta, &ip_origen_final, &ip_destino_final, ttl_vport_dos);
+        }
+    } else if (ttl_vport_uno > 0) {
+        printf("Solo se recibió respuesta por vport_uno. TTL: %d\n", ttl_vport_uno);
+        agregarNodo(tabla_ruta, &ip_origen_final, &ip_destino_final, ttl_vport_uno);
+    } else if (ttl_vport_dos > 0) {
+        printf("Solo se recibió respuesta por vport_dos. TTL: %d\n", ttl_vport_dos);
+        agregarNodo(tabla_ruta, &ip_origen_final, &ip_destino_final, ttl_vport_dos);
     } else {
-        printf("No se encontró una ruta más corta.\n");
+        printf("No se recibió respuesta por ningún puerto.\n");
     }
 }
