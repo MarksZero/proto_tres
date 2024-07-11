@@ -50,9 +50,13 @@ void liberarLista(nodo **cabeza);
 
 nodo *encontrarRutaMasCorta(nodo *cabeza);
 
-void enviar_a_todos(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final, BYTE ip_destino_final, BYTE TTL);
+void mostrarRutas(nodo *tabla_ruta);
 
-void ping_rutas(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final);
+void preparar_Ping(const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final, BYTE ip_destino_final, BYTE TTL) ;
+int leerRespuestaPing(FILE* vport, frame_ipv4* frame_rx, char* msg_rx);
+void actualizarTablaRutas(nodo **tabla_ruta, BYTE ip_origen_final, BYTE ip_destino_final, int ttl_vport_uno, int ttl_vport_dos);
+
+void ping_rutas(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final, BYTE ip_destino_final);
 
 
 bool flag = true;
@@ -86,28 +90,15 @@ int main(int nargs, char *arg_arr[]) {
         //Obtiene descriptores
 
         //Indica inicio del chat
-        int opcion;
+
+        memset(msg, 0, sizeof(msg));
+        memset(msg_rx, 0, sizeof(msg_rx));
         printf("opciones\n");
         printf("0.- Enviar mensaje\n");
         printf("1.-Instructivo\n");
         printf("2.- Mostrar rutas\n");
         printf("3.- Ping\n");
         printf("|------------------------------------|\n");
-        sscanf(msg,"%d", &opcion);
-        if (opcion == 0) {
-            instrucciones(0, nombreIP);
-        } else if (opcion == 1) {
-            instrucciones(1, nombreIP);
-        } else if (opcion == 2) {
-            //mostrar rutas
-        } else if (opcion == 3) {
-            ping_rutas(&tabla_ruta, virtual_port_tx, virtual_port_rx, frame.ip_origen[3]);
-        } else {
-            printf("Error\n");
-        }
-
-        memset(msg, 0, sizeof(msg));
-        memset(msg_rx, 0, sizeof(msg_rx));
 
         while (flag) {
 
@@ -157,9 +148,6 @@ int main(int nargs, char *arg_arr[]) {
                         printf("TTL: %hhu\n", (13 - recibido.TTL));
                         printf("MENSAJE: %s\n", recibido.DATA);
                         printf("-------------------------------------\n");
-                        if (strcmp((char *) recibido.DATA, "DOOM") == 0) {
-                            doom();
-                        }
                         recibido.TTL--;
                         if (recibido.TTL > 0) {
                             empaquetar_IPV4(buffer, &recibido);
@@ -175,6 +163,7 @@ int main(int nargs, char *arg_arr[]) {
                         printf("TTL: %hhu\n", (13 - recibido.TTL));
                         printf("MENSAJE: %s\n", recibido.DATA);
                         printf("-------------------------------------\n");
+
                     } else {
                         recibido.TTL--;
                         empaquetar_IPV4(buffer, &recibido);
@@ -187,12 +176,30 @@ int main(int nargs, char *arg_arr[]) {
 //*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
             //Lee consola y envía el mensaje por el puerto virtual
             len = readPort(stdin_desc, (BYTE *) msg, 500, 100);
+
+
+
             msg[len] = '\0';
             if (len > 0) {
+
                 if (msg[len - 1] == '\n') {
                     msg[len - 1] = '\0';
                     len--;
+                }   int opcion;
+
+                sscanf(msg,"%d [^\n]", &opcion);
+                if (opcion == 0) {
+                    instrucciones(0, nombreIP);
+                } else if (opcion == 1) {
+                    instrucciones(1, nombreIP);
+                } else if (opcion == 2) {
+                    mostrarRutas(tabla_ruta);
+                } else if (opcion == 3) {
+                    ping_rutas(&tabla_ruta, virtual_port_tx, virtual_port_rx, frame.ip_origen[3], 5);
+                } else {
+                    printf("Error\n");
                 }
+
                 int ruta;
                 printf("escribio -> %s\n", msg);
                 frame.flag_fragmento = 0;
@@ -402,45 +409,78 @@ void instrucciones(int op, char *nombreIP) {
     }
 }
 
-void enviar_a_todos(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final, BYTE ip_destino_final, BYTE TTL){
+void mostrarRutas(nodo *tabla_ruta) {
+    nodo *actual = tabla_ruta;
+    if (actual == nullptr) {
+        printf("La tabla de rutas está vacía.\n");
+        return;
+    }
+    printf("Tabla de Rutas:\n");
+    printf("IP Origen\t\tIP Destino\t\tTTL\n");
+    while (actual != nullptr) {
+        printf("%hhu.%hhu.%hhu.%hhu\t->\t%hhu.%hhu.%hhu.%hhu\t\t%d\n",
+               actual->ip_origen[0], actual->ip_origen[1], actual->ip_origen[2], actual->ip_origen[3],
+               actual->ip_destino[0], actual->ip_destino[1], actual->ip_destino[2], actual->ip_destino[3],
+               actual->TTL);
+        actual = actual->siguiente;
+    }
+}
+
+void preparar_Ping(const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final, BYTE ip_destino_final, BYTE TTL) {
     frame_ipv4 frame;
-    BYTE ip_base[3] = {192, 168, 130};
-    memcpy(frame.ip_origen, ip_base, 3);
+    BYTE buffer[1516] = {0};
+
+    // Configurar el frame para un ping
     frame.ip_origen[3] = ip_origen_final;
-    memcpy(frame.ip_destino, ip_base, 3);
     frame.ip_destino[3] = ip_destino_final;
     frame.TTL = TTL;
+    strcpy((char *)frame.DATA, "PING");
+    frame.len_datos = strlen((char *)frame.DATA) + 1;
 
-    // Determinar el mensaje basado en el puerto virtual utilizado
-    if (strcmp(virtual_port_tx, "vport_uno") == 0) {
-        strcpy((char *) frame.DATA, "ruta_*_1");
-    } else if (strcmp(virtual_port_rx, "vport_dos") == 0) {
-        strcpy((char *) frame.DATA, "ruta_*_2");
-    }
-
-    frame.len_datos = largo_data(&frame);
-
-    BYTE buffer[1516] = {0};
+    // Empaquetar el frame
     empaquetar_IPV4(buffer, &frame);
 
-    FILE *vport_uno = fopen(virtual_port_tx, "w+");
-    FILE *vport_dos = fopen(virtual_port_rx, "w+");
-    if (vport_uno != nullptr && vport_dos != nullptr) {
-        writeSlip(buffer, (frame.len_datos + 16), vport_uno);
-        writeSlip(buffer, (frame.len_datos + 16), vport_dos);
-        fclose(vport_uno);
-        fclose(vport_dos);
-    } else {
-        if (vport_uno != nullptr) fclose(vport_uno);
-        if (vport_dos != nullptr) fclose(vport_dos);
+    // Enviar el paquete a través de los puertos virtuales
+    FILE *vport_tx = fopen(virtual_port_tx, "w+");
+    FILE *vport_rx = fopen(virtual_port_rx, "w+");
+    if (vport_tx != nullptr) {
+        writeSlip(buffer, (frame.len_datos + 16), vport_tx);
+        fclose(vport_tx);
     }
-
-    agregarNodo(tabla_ruta, &frame.ip_origen[3], &frame.ip_destino[3], frame.TTL);
+    if (vport_rx != nullptr) {
+        writeSlip(buffer, (frame.len_datos + 16), vport_rx);
+        fclose(vport_rx);
+    }
 }
-void ping_rutas(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final) {
-    BYTE ip_destino_final;
-    printf("Ingrese el último octeto de la IP de destino (1-254): ");
-    scanf("%hhu", &ip_destino_final);
+int leerRespuestaPing(FILE* vport, frame_ipv4* frame_rx, char* msg_rx) {
+    int len = readSlip((BYTE*)msg_rx, 1000, vport);
+    if (len > 0) {
+        // Desempaquetar el mensaje recibido en el frame de respuesta
+        desempaquetar_IPV4((BYTE*)msg_rx, frame_rx);
+        // Verificar si el mensaje es una respuesta de ping (PONG)
+        if (strcmp((char*)frame_rx->DATA, "PONG") == 0) {
+            // Retornar el TTL del mensaje de respuesta
+            return frame_rx->TTL;
+        }
+    }
+    // Si no se recibe respuesta o no es un PONG, retornar -1
+    return -1;
+}
+
+void actualizarTablaRutas(nodo **tabla_ruta, BYTE ip_origen_final, BYTE ip_destino_final, int ttl_vport_uno, int ttl_vport_dos) {
+    int menor_ttl = (ttl_vport_uno < ttl_vport_dos) ? ttl_vport_uno : ttl_vport_dos;
+    nodo *nodo_ruta = buscarNodo(*tabla_ruta, &ip_destino_final);
+    if (nodo_ruta == nullptr) {
+        BYTE ip_origen[3] = {0}; // Asumiendo que ip_origen se maneja de alguna manera específica
+        agregarNodo(tabla_ruta, ip_origen, &ip_destino_final, menor_ttl);
+    } else {
+        if (menor_ttl < nodo_ruta->TTL) {
+            nodo_ruta->TTL = menor_ttl;
+        }
+    }
+}
+
+void ping_rutas(nodo **tabla_ruta, const char *virtual_port_tx, const char *virtual_port_rx, BYTE ip_origen_final, BYTE ip_destino_final) {
 
     if (ip_destino_final == ip_origen_final || ip_destino_final < 1 || ip_destino_final > 254) {
         printf("IP de destino inválida.\n");
@@ -448,75 +488,28 @@ void ping_rutas(nodo **tabla_ruta, const char *virtual_port_tx, const char *virt
     }
 
     frame_ipv4 frame_tx, frame_rx;
-    BYTE buffer[1516] = {0};
     char msg_rx[1000];
-    int len;
 
-    FILE *vport_uno = fopen(virtual_port_tx, "w+");
+    // Asegurarse de que los puertos virtuales se abren correctamente
+    FILE *vport_uno = fopen(virtual_port_tx, "w+"); // Modo de lectura y escritura
     FILE *vport_dos = fopen(virtual_port_rx, "w+");
 
-    if (vport_uno == NULL || vport_dos == NULL) {
+    if (!vport_uno || !vport_dos) {
         printf("Error al abrir los puertos virtuales.\n");
         if (vport_uno) fclose(vport_uno);
         if (vport_dos) fclose(vport_dos);
         return;
     }
 
-    // Preparar el frame de ping
-    BYTE ip_base[3] = {192, 168, 130};
-    memcpy(frame_tx.ip_origen, ip_base, 3);
-    frame_tx.ip_origen[3] = ip_origen_final;
-    memcpy(frame_tx.ip_destino, ip_base, 3);
-    frame_tx.ip_destino[3] = ip_destino_final;
-    frame_tx.TTL = 13;
-    frame_tx.es_ping = true;
-    strcpy((char*)frame_tx.DATA, "PING");
-    frame_tx.len_datos = strlen((char*)frame_tx.DATA) + 1;
-
-    // Enviar por vport_uno
-    empaquetar_IPV4(buffer, &frame_tx);
-    writeSlip(buffer, (frame_tx.len_datos + 16), vport_uno);
-
-    // Esperar y leer la respuesta
-    len = readSlip((BYTE *)msg_rx, 1000, vport_uno);
-    int ttl_vport_uno = -1;
-    if (len > 0) {
-        desempaquetar_IPV4((BYTE *)msg_rx, &frame_rx);
-        ttl_vport_uno = frame_rx.TTL;
-    }
-
-    // Enviar por vport_dos
-    writeSlip(buffer, (frame_tx.len_datos + 16), vport_dos);
-
-    // Esperar y leer la respuesta
-    len = readSlip((BYTE *)msg_rx, 1000, vport_dos);
-    int ttl_vport_dos = -1;
-    if (len > 0) {
-        desempaquetar_IPV4((BYTE *)msg_rx, &frame_rx);
-        ttl_vport_dos = frame_rx.TTL;
-    }
+    // Preparar y enviar el frame de ping por ambos puertos
+    preparar_Ping(virtual_port_tx, virtual_port_rx, ip_origen_final, ip_destino_final, 5);
+    // Leer y comparar las respuestas de ambos puertos
+    int ttl_vport_uno = leerRespuestaPing(vport_uno, &frame_tx, msg_rx);
+    int ttl_vport_dos = leerRespuestaPing(vport_dos, &frame_rx, msg_rx);
 
     fclose(vport_uno);
     fclose(vport_dos);
 
-    // Comparar y mostrar resultados
-    if (ttl_vport_uno > 0 && ttl_vport_dos > 0) {
-        if (ttl_vport_uno >= ttl_vport_dos) {
-            printf("La ruta más rápida a %d.%d.%d.%d es por vport_uno con TTL %d\n",
-                   192, 168, 130, ip_destino_final, ttl_vport_uno);
-            agregarNodo(tabla_ruta, &ip_origen_final, &ip_destino_final, ttl_vport_uno);
-        } else {
-            printf("La ruta más rápida a %d.%d.%d.%d es por vport_dos con TTL %d\n",
-                   192, 168, 130, ip_destino_final, ttl_vport_dos);
-            agregarNodo(tabla_ruta, &ip_origen_final, &ip_destino_final, ttl_vport_dos);
-        }
-    } else if (ttl_vport_uno > 0) {
-        printf("Solo se recibió respuesta por vport_uno. TTL: %d\n", ttl_vport_uno);
-        agregarNodo(tabla_ruta, &ip_origen_final, &ip_destino_final, ttl_vport_uno);
-    } else if (ttl_vport_dos > 0) {
-        printf("Solo se recibió respuesta por vport_dos. TTL: %d\n", ttl_vport_dos);
-        agregarNodo(tabla_ruta, &ip_origen_final, &ip_destino_final, ttl_vport_dos);
-    } else {
-        printf("No se recibió respuesta por ningún puerto.\n");
-    }
+    // Actualizar la tabla de rutas basada en los TTL recibidos
+    actualizarTablaRutas(tabla_ruta, ip_origen_final, ip_destino_final, ttl_vport_uno, ttl_vport_dos);
 }
