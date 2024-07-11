@@ -190,6 +190,30 @@ int main(int nargs, char *arg_arr[]) {
                 sscanf(msg,"%d [^\n]", &opcion);
                 if (opcion == 0) {
                     instrucciones(0, nombreIP);
+                    int ruta;
+                    printf("escribio -> %s\n", msg);
+                    frame.flag_fragmento = 0;
+                    frame.offset_fragmento = 0;
+                    frame.ip_destino[0] = 192;
+                    frame.ip_destino[1] = 168;
+                    frame.ip_destino[2] = 130;
+                    sscanf(msg, "%d / %d / %hhu /%499[^\n]",&opcion, &ruta, &frame.ip_destino[3], frame.DATA);
+                    frame.len_datos = largo_data(&frame);
+                    frame.TTL = 12;
+                    frame.identificacion = 0;
+                    if (frame.ip_destino[3] == 255) {
+                        printf("BROADCAST DETECTADO %d -", frame.ip_destino[3]);
+                        empaquetar_IPV4(buffer, &frame);
+                        writeSlip((BYTE *) buffer, (frame.len_datos + 16), vport_uno);
+                        printf("ENVIANDO DATA --> %s\n", frame.DATA);
+                    } else if (frame.ip_destino[3] > 0 && frame.ip_destino[3] < 255) {
+                        printf("UNICAST\n");
+                        empaquetar_IPV4(buffer, &frame);
+                        writeSlip((BYTE *) buffer, (frame.len_datos + 16), vport_uno);
+                        printf("ENVIANDO DATA --> %s\n", frame.DATA);
+                    } else {
+                        printf("Error\n");
+                    }
                 } else if (opcion == 1) {
                     instrucciones(1, nombreIP);
                 } else if (opcion == 2) {
@@ -199,31 +223,7 @@ int main(int nargs, char *arg_arr[]) {
                 } else {
                     printf("Error\n");
                 }
-
-                int ruta;
-                printf("escribio -> %s\n", msg);
-                frame.flag_fragmento = 0;
-                frame.offset_fragmento = 0;
-                frame.ip_destino[0] = 192;
-                frame.ip_destino[1] = 168;
-                frame.ip_destino[2] = 130;
-                sscanf(msg, "%hhu / %d / %499[^\n]", &frame.ip_destino[3], &ruta, frame.DATA);
-                frame.len_datos = largo_data(&frame);
-                frame.TTL = 12;
-                frame.identificacion = 0;
-                if (frame.ip_destino[3] == 255) {
-                    printf("BROADCAST DETECTADO %d -", frame.ip_destino[3]);
-                    empaquetar_IPV4(buffer, &frame);
-                    writeSlip((BYTE *) buffer, (frame.len_datos + 16), vport_uno);
-                    printf("ENVIANDO DATA --> %s\n", frame.DATA);
-                } else if (frame.ip_destino[3] > 0 && frame.ip_destino[3] < 255) {
-                    printf("UNICAST\n");
-                    empaquetar_IPV4(buffer, &frame);
-                    writeSlip((BYTE *) buffer, (frame.len_datos + 16), vport_uno);
-                    printf("ENVIANDO DATA --> %s\n", frame.DATA);
-                } else {
-                    printf("Error\n");
-                }
+                opcion = 4;
                 memset(buffer, 0, sizeof(buffer));
                 memset(msg, 0, sizeof(msg));
             }
@@ -396,15 +396,15 @@ nodo *encontrarRutaMasCorta(nodo *cabeza) {
 
 void instrucciones(int op, char *nombreIP) {
     if (op == 0) {
-        printf("chat\n");
-        printf("Ya puede escribir sus mensajes !\n");
+
         printf("Mi IP: %s\n", nombreIP);
         printf("Seleccione IP de destino\n");
+
     } else if (op == 1) {
         printf("|---SOLO ESCRIBIR ULTIMO VALOR---|\n");
         printf("Recuerde 255 es broadcast\n");
         printf("Rango entre 1-254 usuario\n");
-        printf("Ejemplo --> 255 / Puerto / MENSAJE.\n");
+        printf("Ejemplo --> 0 / Puerto / 255 / MENSAJE.\n");
         printf("|----Para-obtener-las-rutas---> rutas**----|\n");
     }
 }
